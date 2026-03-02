@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>엑셀 단어 암기 퀴즈</title>
+
+  <!-- Bootstrap (UI 편의용, 없어도 됨) -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- SheetJS: 엑셀(xlsx) 파싱 -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <style>
+    body { background: #fafafa; }
+    .card { border-radius: 16px; }
+    .choice-btn { text-align: left; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .muted { color: #666; }
+    .word-big { font-size: 2rem; font-weight: 800; letter-spacing: 0.5px; }
+    .badge-mastered { background: #198754; }
+    .badge-wrong { background: #dc3545; }
+    .table-wrap { max-height: 320px; overflow: auto; }
+  </style>
+</head>
+<body>
+<div class="container py-4">
+
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h1 class="h3 mb-1">엑셀 단어 암기 퀴즈</h1>
+      <div class="muted">엑셀 업로드 → 랜덤 퀴즈 → 오답 시 문장/추가암기 표시 → 정답 항목 관리</div>
+    </div>
+    <div class="text-end">
+      <button id="btnResetAll" class="btn btn-outline-danger btn-sm">전체 초기화(진행상태 삭제)</button>
+    </div>
+  </div>
+
+  <!-- 업로드 / 설정 -->
+  <div class="card shadow-sm mb-3">
+    <div class="card-body">
+      <div class="row g-3 align-items-end">
+        <div class="col-lg-6">
+          <label class="form-label">엑셀 파일 업로드 (.xlsx)</label>
+          <input id="fileInput" type="file" class="form-control" accept=".xlsx,.xls,.csv" />
+          <div class="form-text">
+            권장 컬럼명: <span class="mono">번호, 단어, 뜻, 문장, 추가암기</span> (대소문자/공백 조금 달라도 최대한 맞춰 읽습니다)
+          </div>
+        </div>
+
+        <div class="col-lg-3">
+          <label class="form-label">정답(마스터) 단어 처리</label>
+          <select id="masterMode" class="form-select">
+            <option value="keep">계속 랜덤으로 나오게(유지)</option>
+            <option value="remove">문제 풀에서 제외(삭제/숨김)</option>
+          </select>
+        </div>
+
+        <div class="col-lg-3 d-grid">
+          <button id="btnStart" class="btn btn-primary" disabled>퀴즈 시작 / 다음 문제</button>
+        </div>
+      </div>
+
+      <hr class="my-3" />
+
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <span class="badge text-bg-secondary">총 단어: <span id="statTotal">0</span></span>
+        <span class="badge badge-mastered">정답(마스터): <span id="statMastered">0</span></span>
+        <span class="badge badge-wrong">오답 기록: <span id="statWrong">0</span></span>
+        <span class="badge text-bg-info">현재 출제 풀: <span id="statPool">0</span></span>
+        <button id="btnExportCSV" class="btn btn-outline-secondary btn-sm ms-auto" disabled>진행상태 CSV로 내보내기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 퀴즈 영역 -->
+  <div class="card shadow-sm mb-3">
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <div class="muted mb-2">문제</div>
+          <div id="quizWord" class="word-big">엑셀을 업로드하세요</div>
+          <div class="mt-2 muted">번호: <span id="quizNo" class="mono">-</span></div>
+        </div>
+
+        <div class="col-lg-6">
+          <div class="muted mb-2">뜻을 고르세요 (랜덤 4지선다)</div>
+          <div id="choices" class="d-grid gap-2"></div>
+
+          <div id="resultBox" class="mt-3" style="display:none;">
+            <div id="resultMsg" class="fw-bold"></div>
+
+            <div id="wrongDetail" class="mt-2" style="display:none;">
+              <div class="card bg-light border-0 mt-2">
+                <div class="card-body">
+                  <div class="mb-2"><span class="fw-semibold">문장</span>: <span id="detailSentence"></span></div>
+                  <div><span class="fw-semibold">추가암기</span>: <span id="detailExtra"></span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="d-flex gap-2 mt-3">
+              <button id="btnNext" class="btn btn-primary">다음 문제</button>
+              <button id="btnToggleMaster" class="btn btn-outline-success">이 단어를 마스터로 표시/해제</button>
+              <button id="btnRemoveFromPool" class="btn btn-outline-dark">이 단어를 출제 풀에서 제외/복귀</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 단어표 -->
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <div class="h5 mb-0">단어 표 (정답 체크 / 출제 풀 관리)</div>
+        <input id="searchBox" class="form-control" style="max-width: 320px;" placeholder="검색: 단어/뜻/추가암기" />
+      </div>
+
+      <div class="table-wrap">
+        <table class="table table-sm align-middle">
+          <thead class="table-light">
+            <tr>
+              <th style="width:80px;">번호</th>
+              <th style="width:160px;">단어</th>
+              <th>뜻</th>
+              <th style="width:120px;">상태</th>
+              <th style="width:220px;">관리</th>
+            </tr>
+          </thead>
+          <tbody id="wordTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/** =========================
+ *  저장 키 / 상태
+ *  ========================= */
+const LS_KEY = "vocab_quiz_state_v1";
+
+let state = {
+  items: [],          // {id, no, word, meaning, sentence, extra}
+  mastered: {},       // {id: true}
+  wrongCount: {},     // {id: number}
+  removed: {},        // {id: true}  // 출제 풀에서 제외
+  masterMode: "keep", // keep|remove
+  lastFileName: ""
+};
+
+let currentQuestion = null; // {item, choices: [{text,isCorrect}]}
+
+/** =========================
+ *  유틸
+ *  ========================= */
+function uid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function normalizeHeader(h) {
+  return String(h || "").trim().replace(/\s+/g, "");
+}
+
+function safeText(x) {
+  if (x === null || x === undefined) return "";
+  return String(x).trim();
+}
+
+function saveState() {
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+}
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    // 기본 안전장치
+    if (parsed && typeof parsed === "object") state = { ...state, ...parsed };
+  } catch (e) {
+    console.warn("loadState failed", e);
+  }
+}
+
+function resetAll() {
+  localStorage.removeItem(LS_KEY);
+  state = {
+    items: [],
+    mastered: {},
+    wrongCount: {},
+    removed: {},
+    masterMode: "keep",
+    lastFileName: ""
+  };
+  currentQuestion = null;
+  renderAll();
+}
+
+/** =========================
+ *  DOM
+ *  ========================= */
+const fileInput = document.getElementById("fileInput");
+const btnStart = document.getElementById("btnStart");
+const masterModeSelect = document.getElementById("masterMode");
+const btnResetAll = document.getElementById("btnResetAll");
+const btnExportCSV = document.getElementById("btnExportCSV");
+
+const quizWord = document.getElementById("quizWord");
+const quizNo = document.getElementById("quizNo");
+const choicesDiv = document.getElementById("choices");
+
+const resultBox = document.getElementById("resultBox");
+const resultMsg = document.getElementById("resultMsg");
+const wrongDetail = document.getElementById("wrongDetail");
+const detailSentence = document.getElementById("detailSentence");
+const detailExtra = document.getElementById("detailExtra");
+
+const btnNext = document.getElementById("btnNext");
+const btnToggleMaster = document.getElementById("btnToggleMaster");
+const btnRemoveFromPool = document.getElementById("btnRemoveFromPool");
+
+const statTotal = document.getElementById("statTotal");
+const statMastered = document.getElementById("statMastered");
+const statWrong = document.getElementById("statWrong");
+const statPool = document.getElementById("statPool");
+
+const wordTableBody = document.getElementById("wordTableBody");
+const searchBox = document.getElementById("searchBox");
+
+/** =========================
+ *  엑셀 파싱
+ *  ========================= */
+async function parseExcel(file) {
+  const data = await file.arrayBuffer();
+  const wb = XLSX.read(data, { type: "array" });
+  const sheetName = wb.SheetNames[0];
+  const sheet = wb.Sheets[sheetName];
+
+  // 2D 배열로 읽기
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  if (!rows.length) throw new Error("엑셀에 데이터가 없습니다.");
+
+  const headerRow = rows[0].map(normalizeHeader);
+
+  // 헤더 매핑(유연하게)
+  const idx = {
+    no: headerRow.findIndex(h => ["번호","No","NO","num","number"].includes(h)),
+    word: headerRow.findIndex(h => ["단어","word","vocab","vocabulary"].includes(h.toLowerCase())),
+    meaning: headerRow.findIndex(h => ["뜻","의미","meaning","mean"].includes(h.toLowerCase()) || h === "뜻" || h === "의미"),
+    sentence: headerRow.findIndex(h => ["문장","예문","sentence","example"].includes(h.toLowerCase()) || h === "문장" || h === "예문"),
+    extra: headerRow.findIndex(h => ["추가암기","추가","암기","note","memo","hint","extra"].includes(h.toLowerCase()) || h === "추가암기")
+  };
+
+  // 최소 word/meaning은 있어야 함
+  if (idx.word === -1 || idx.meaning === -1) {
+    throw new Error("필수 컬럼(단어/뜻)을 찾지 못했어요. 헤더를 '단어', '뜻'으로 맞춰주세요.");
+  }
+
+  const items = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    const word = safeText(row[idx.word]);
+    const meaning = safeText(row[idx.meaning]);
+    if (!word || !meaning) continue;
+
+    items.push({
+      id: uid(),
+      no: safeText(idx.no >= 0 ? row[idx.no] : r),
+      word,
+      meaning,
+      sentence: safeText(idx.sentence >= 0 ? row[idx.sentence] : ""),
+      extra: safeText(idx.extra >= 0 ? row[idx.extra] : "")
+    });
+  }
+
+  if (!items.length) throw new Error("단어/뜻 데이터가 비어 있어요.");
+  return items;
+}
+
+/** =========================
+ *  출제 풀 / 문제 생성
+ *  ========================= */
+function getPoolItems() {
+  // removed 제외 + (masterMode가 remove인 경우 mastered 제외)
+  return state.items.filter(it => {
+    if (state.removed[it.id]) return false;
+    if (state.masterMode === "remove" && state.mastered[it.id]) return false;
+    return true;
+  });
+}
+
+function generateQuestion() {
+  const pool = getPoolItems();
+  if (!pool.length) return null;
+
+  const item = pool[Math.floor(Math.random() * pool.length)];
+
+  // 오답 후보: item 제외, meaning이 비어있지 않은 것
+  const others = state.items.filter(x => x.id !== item.id && x.meaning);
+  const distractors = shuffle(others).slice(0, 3).map(x => x.meaning);
+
+  // 만약 단어 수가 적어서 오답 3개 못 채우면 중복 없이 가능한 만큼
+  const choiceMeanings = [item.meaning, ...distractors].filter((v, i, a) => a.indexOf(v) === i);
+  while (choiceMeanings.length < 2 && others.length) {
+    // 최소 2지선다라도 만들기
+    const pick = others[Math.floor(Math.random() * others.length)].meaning;
+    if (!choiceMeanings.includes(pick)) choiceMeanings.push(pick);
+  }
+
+  const choices = shuffle(choiceMeanings).map(text => ({
+    text,
+    isCorrect: text === item.meaning
+  }));
+
+  return { item, choices };
+}
+
+/** =========================
+ *  렌더
+ *  ========================= */
+function renderStats() {
+  statTotal.textContent = state.items.length;
+
+  const masteredCount = Object.keys(state.mastered).length;
+  statMastered.textContent = masteredCount;
+
+  const wrongTotal = Object.values(state.wrongCount).reduce((a, b) => a + (b || 0), 0);
+  statWrong.textContent = wrongTotal;
+
+  statPool.textContent = getPoolItems().length;
+
+  btnStart.disabled = state.items.length === 0;
+  btnExportCSV.disabled = state.items.length === 0;
+
+  masterModeSelect.value = state.masterMode;
+}
+
+function renderQuestion() {
+  if (!currentQuestion) {
+    quizWord.textContent = "문제를 만들 수 없어요 (출제 풀이 비었을 수 있어요).";
+    quizNo.textContent = "-";
+    choicesDiv.innerHTML = "";
+    resultBox.style.display = "none";
+    return;
+  }
+
+  const { item, choices } = currentQuestion;
+  quizWord.textContent = item.word;
+  quizNo.textContent = item.no;
+
+  choicesDiv.innerHTML = "";
+  choices.forEach((c, idx) => {
+    const btn = document.createElement("button");
+    btn.className = "btn btn-outline-primary choice-btn";
+    btn.textContent = `${idx + 1}. ${c.text}`;
+    btn.onclick = () => onChoose(c);
+    choicesDiv.appendChild(btn);
+  });
+
+  resultBox.style.display = "none";
+  wrongDetail.style.display = "none";
+}
+
+function renderTable() {
+  const q = safeText(searchBox.value).toLowerCase();
+  const filtered = state.items.filter(it => {
+    if (!q) return true;
+    return (
+      it.word.toLowerCase().includes(q) ||
+      it.meaning.toLowerCase().includes(q) ||
+      (it.extra || "").toLowerCase().includes(q)
+    );
+  });
+
+  wordTableBody.innerHTML = "";
+  filtered.forEach(it => {
+    const tr = document.createElement("tr");
+
+    const tdNo = document.createElement("td");
+    tdNo.textContent = it.no;
+
+    const tdWord = document.createElement("td");
+    tdWord.innerHTML = `<span class="mono fw-semibold">${escapeHtml(it.word)}</span>`;
+
+    const tdMeaning = document.createElement("td");
+    tdMeaning.textContent = it.meaning;
+
+    const mastered = !!state.mastered[it.id];
+    const removed = !!state.removed[it.id];
+    const wrong = state.wrongCount[it.id] || 0;
+
+    const tdStatus = document.createElement("td");
+    tdStatus.innerHTML = `
+      ${mastered ? `<span class="badge badge-mastered">✅ 마스터</span>` : `<span class="badge text-bg-secondary">진행중</span>`}
+      ${removed ? ` <span class="badge text-bg-dark">풀 제외</span>` : ``}
+      ${wrong ? ` <span class="badge badge-wrong">오답 ${wrong}</span>` : ``}
+    `;
+
+    const tdActions = document.createElement("td");
+    const btnM = document.createElement("button");
+    btnM.className = "btn btn-sm btn-outline-success me-1";
+    btnM.textContent = mastered ? "마스터 해제" : "마스터";
+    btnM.onclick = () => {
+      toggleMaster(it.id);
+      renderAll();
+    };
+
+    const btnR = document.createElement("button");
+    btnR.className = "btn btn-sm btn-outline-dark";
+    btnR.textContent = removed ? "풀 복귀" : "풀 제외";
+    btnR.onclick = () => {
+      toggleRemoved(it.id);
+      renderAll();
+    };
+
+    tdActions.appendChild(btnM);
+    tdActions.appendChild(btnR);
+
+    tr.appendChild(tdNo);
+    tr.appendChild(tdWord);
+    tr.appendChild(tdMeaning);
+    tr.appendChild(tdStatus);
+    tr.appendChild(tdActions);
+
+    wordTableBody.appendChild(tr);
+  });
+}
+
+function renderAll() {
+  renderStats();
+  renderTable();
+  renderQuestion();
+}
+
+/** =========================
+ *  로직(정답/오답)
+ *  ========================= */
+function onChoose(choice) {
+  if (!currentQuestion) return;
+  const it = currentQuestion.item;
+
+  // 선택 버튼 비활성화
+  Array.from(choicesDiv.querySelectorAll("button")).forEach(b => b.disabled = true);
+
+  resultBox.style.display = "block";
+
+  if (choice.isCorrect) {
+    resultMsg.className = "fw-bold text-success";
+    resultMsg.textContent = "정답! 다음 문제로 넘어가세요.";
+
+    // 마스터 처리
+    state.mastered[it.id] = true;
+
+    // 마스터 모드가 remove면 출제 풀에서 제외(자동)
+    if (state.masterMode === "remove") {
+      state.removed[it.id] = true;
+    }
+
+    wrongDetail.style.display = "none";
+  } else {
+    resultMsg.className = "fw-bold text-danger";
+    resultMsg.textContent = "오답! 아래 문장/추가암기를 확인하세요.";
+
+    state.wrongCount[it.id] = (state.wrongCount[it.id] || 0) + 1;
+
+    detailSentence.textContent = it.sentence || "(문장 없음)";
+    detailExtra.textContent = it.extra || "(추가암기 없음)";
+    wrongDetail.style.display = "block";
+  }
+
+  saveState();
+  renderStats(); // 숫자만 갱신
+}
+
+function nextQuestion() {
+  currentQuestion = generateQuestion();
+  renderAll();
+}
+
+function toggleMaster(id) {
+  if (state.mastered[id]) delete state.mastered[id];
+  else state.mastered[id] = true;
+
+  // 모드가 remove인데 마스터 해제하면 removed도 자동 해제해주는 게 자연스러움
+  if (state.masterMode === "remove" && !state.mastered[id]) {
+    delete state.removed[id];
+  }
+  saveState();
+}
+
+function toggleRemoved(id) {
+  if (state.removed[id]) delete state.removed[id];
+  else state.removed[id] = true;
+  saveState();
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, s => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[s]));
+}
+
+/** =========================
+ *  CSV 내보내기
+ *  ========================= */
+function exportProgressCSV() {
+  const header = ["번호","단어","뜻","문장","추가암기","마스터","풀제외","오답횟수"];
+  const lines = [header.join(",")];
+
+  state.items.forEach(it => {
+    const row = [
+      it.no,
+      it.word,
+      it.meaning,
+      it.sentence,
+      it.extra,
+      state.mastered[it.id] ? "Y" : "",
+      state.removed[it.id] ? "Y" : "",
+      state.wrongCount[it.id] || 0
+    ].map(v => `"${String(v ?? "").replace(/"/g,'""')}"`);
+    lines.push(row.join(","));
+  });
+
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "vocab_progress.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** =========================
+ *  이벤트
+ *  ========================= */
+fileInput.addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  try {
+    const items = await parseExcel(file);
+
+    // 새 파일 업로드 시: items 교체, 기존 진행상태는 초기화(원하면 바꿀 수 있음)
+    state.items = items;
+    state.mastered = {};
+    state.wrongCount = {};
+    state.removed = {};
+    state.lastFileName = file.name;
+
+    saveState();
+    currentQuestion = generateQuestion();
+    renderAll();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+});
+
+btnStart.addEventListener("click", () => {
+  // "시작/다음" 버튼 역할
+  if (!currentQuestion) currentQuestion = generateQuestion();
+  else currentQuestion = generateQuestion();
+  renderAll();
+});
+
+btnNext.addEventListener("click", () => nextQuestion());
+
+btnToggleMaster.addEventListener("click", () => {
+  if (!currentQuestion) return;
+  toggleMaster(currentQuestion.item.id);
+  renderAll();
+});
+
+btnRemoveFromPool.addEventListener("click", () => {
+  if (!currentQuestion) return;
+  toggleRemoved(currentQuestion.item.id);
+  renderAll();
+});
+
+masterModeSelect.addEventListener("change", () => {
+  state.masterMode = masterModeSelect.value;
+  // 모드 변경 후 풀 재계산을 위해 현재문제 재생성
+  saveState();
+  currentQuestion = generateQuestion();
+  renderAll();
+});
+
+btnResetAll.addEventListener("click", () => {
+  if (confirm("진행상태/단어목록을 모두 초기화할까요?")) resetAll();
+});
+
+btnExportCSV.addEventListener("click", exportProgressCSV);
+
+searchBox.addEventListener("input", renderTable);
+
+/** =========================
+ *  초기 로드
+ *  ========================= */
+loadState();
+masterModeSelect.value = state.masterMode;
+
+// 상태에 단어가 이미 있으면 문제 생성
+if (state.items.length) currentQuestion = generateQuestion();
+renderAll();
+</script>
+</body>
+</html>
